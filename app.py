@@ -13,9 +13,9 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Rice Nitrogen Prediction API")
+app = FastAPI()
 
-# Allow all origins (mobile apps)
+# Allow all origins for mobile app
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,13 +23,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load model
-model_path = os.path.join(os.path.dirname(__file__), "model.pkl")
+# Load trained model
 try:
-    model = joblib.load(model_path)
+    model = joblib.load("model.pkl")
     logger.info("Model loaded successfully")
-except Exception as e:
-    logger.warning(f"model.pkl not found or failed to load: {e}")
+except FileNotFoundError:
+    logger.warning("model.pkl not found. Creating dummy model for testing.")
     from sklearn.ensemble import RandomForestRegressor
     model = RandomForestRegressor(n_estimators=10)
     X_dummy = np.random.rand(10, 16)
@@ -37,7 +36,7 @@ except Exception as e:
     model.fit(X_dummy, y_dummy)
     logger.info("Dummy model created for testing")
 
-# Feature extraction
+# Feature extraction function - exactly 16 features
 def extract_features_opencv(image_path):
     try:
         img_bgr_alpha = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
@@ -92,10 +91,11 @@ def extract_features_opencv(image_path):
         logger.error(f"Error in feature extraction: {e}")
         return None
 
-# Prediction endpoint
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
     try:
+        logger.info(f"Received prediction request for file: {file.filename}")
+
         image_data = await file.read()
         output_bytes = remove(image_data)
         img_no_bg = Image.open(BytesIO(output_bytes))
@@ -104,7 +104,7 @@ async def predict(file: UploadFile = File(...)):
 
         features = extract_features_opencv(temp_path)
         if features is None:
-            return {"error": "Feature extraction failed"}
+            return {"error": "Could not process image - feature extraction failed"}
 
         feature_list = [
             features['R'], features['G'], features['B'],
@@ -125,29 +125,39 @@ async def predict(file: UploadFile = File(...)):
             suggestion = "Consider moderate nitrogen application."
         else:
             status = "Sufficient"
-            suggestion = "Nitrogen level is sufficient."
+            suggestion = "Nitrogen level is sufficient. Maintain current management."
 
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        return {"prediction": prediction, "status": status, "suggestion": suggestion}
+        return {
+            "prediction": prediction,
+            "status": status,
+            "suggestion": suggestion,
+            "success": True
+        }
 
     except Exception as e:
-        logger.error(f"Prediction error: {e}")
-        return {"error": str(e)}
+        logger.error(f"Prediction error: {str(e)}")
+        return {"error": str(e), "success": False}
 
-# Root endpoint
 @app.get("/")
 async def root():
     return {"message": "Nitrogen Prediction API is running!"}
 
-# Health check
+# Health check endpoint
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "model_loaded": hasattr(model, "predict")}
+    return {
+        "status": "healthy",
+        "service": "nitrogen-prediction-api",
+        "model_loaded": hasattr(model, 'predict')
+    }
 
-# Dynamic port for Render
+# Run app on Render
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    import os
+
+    port = int(os.environ.get("PORT", 8000))  # Use Render's PORT env variable
     uvicorn.run(app, host="0.0.0.0", port=port)
