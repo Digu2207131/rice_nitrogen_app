@@ -1,22 +1,12 @@
-# Core build tools
-setuptools>=65.5.0
-wheel>=0.38.4
-pip>=23.0.1
-
-# FastAPI dependencies
-fastapi==0.104.1
-uvicorn==0.24.0
-python-multipart==0.0.6
-
-# Machine Learning & Image Processing
 numpy==1.24.3
 opencv-python-headless==4.8.1.78
 Pillow==10.0.1
 scikit-learn==1.3.2
 joblib==1.3.2
-
-# Background removal
+fastapi==0.104.1
+uvicorn==0.24.0
+python-multipart==0.0.6
 rembg==2.0.38
-
-# Optional: For environment variables
+setuptools>=65.5.0
+wheel>=0.38.4
 python-dotenv==1.0.0
