@@ -1,28 +1,31 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from PIL import Image
+from pydantic import BaseModel
+import uvicorn
 import numpy as np
-import io
 import joblib
+from PIL import Image
+import io
+from rembg import remove
 import cv2
 import pandas as pd
 
 # -------------------------
-# Initialize FastAPI
+# Initialize FastAPI app
 # -------------------------
 app = FastAPI(title="Rice Nitrogen Predictor")
 
-# Allow CORS (for Flutter app)
+# Allow CORS for your Flutter app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Replace with your frontend URL if needed
+    allow_origins=["*"],  # Or put your frontend URL here
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # -------------------------
-# Load RandomForest model
+# Load the model
 # -------------------------
 try:
     model = joblib.load("model.pkl")
@@ -33,28 +36,23 @@ except Exception as e:
     MODEL_LOADED = False
 
 # -------------------------
+# Health check endpoint
+# -------------------------
+@app.get("/health")
+async def health():
+    return {"status": "healthy", "model_loaded": MODEL_LOADED}
+
+# -------------------------
 # Feature extraction function
 # -------------------------
-def extract_features_opencv(image_path):
-    img_bgr_alpha = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
-    if img_bgr_alpha is None or img_bgr_alpha.shape[2] < 3:
+def extract_features_opencv(image: Image.Image):
+    img_array = np.array(image)
+    if img_array.ndim != 3 or img_array.shape[2] != 3:
         return None
 
-    if img_bgr_alpha.shape[2] == 4:
-        bgr = img_bgr_alpha[:, :, :3]
-        alpha = img_bgr_alpha[:, :, 3]
-    else:
-        bgr = img_bgr_alpha
-        alpha = np.ones(bgr.shape[:2], dtype=np.uint8) * 255
-
-    mask = alpha > 0
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)[mask]
-    if rgb.size == 0:
-        return None
-
-    mean_R = np.mean(rgb[:, 0])
-    mean_G = np.mean(rgb[:, 1])
-    mean_B = np.mean(rgb[:, 2])
+    mean_R = np.mean(img_array[:, :, 0])
+    mean_G = np.mean(img_array[:, :, 1])
+    mean_B = np.mean(img_array[:, :, 2])
     sum_rgb = mean_R + mean_G + mean_B
 
     nr = mean_R / sum_rgb if sum_rgb else 0
@@ -64,13 +62,12 @@ def extract_features_opencv(image_path):
     gmr = mean_G / mean_R if mean_R else 0
     gmb = mean_G / mean_B if mean_B else 0
 
-    bgr_pixels = bgr[mask]
-    lab = cv2.cvtColor(bgr_pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2LAB).reshape(-1, 3)
-    hsv = cv2.cvtColor(bgr_pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2HSV).reshape(-1, 3)
-    ycbcr = cv2.cvtColor(bgr_pixels.reshape(-1, 1, 3), cv2.COLOR_BGR2YCrCb).reshape(-1, 3)
+    lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
+    hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+    ycbcr = cv2.cvtColor(img_array, cv2.COLOR_RGB2YCrCb)
 
-    L, a, b = np.mean(lab[:, 0]), np.mean(lab[:, 1]), np.mean(lab[:, 2])
-    H_mean, S, Y_mean = np.mean(hsv[:, 0]), np.mean(hsv[:, 1]), np.mean(ycbcr[:, 0])
+    L, a, b_val = np.mean(lab[:, :, 0]), np.mean(lab[:, :, 1]), np.mean(lab[:, :, 2])
+    H_mean, S, Y_mean = np.mean(hsv[:, :, 0]), np.mean(hsv[:, :, 1]), np.mean(ycbcr[:, :, 0])
     gdr = (mean_G - mean_R) / (mean_G + mean_R) if (mean_G + mean_R) else 0
     VI = (2 * mean_G - mean_R - mean_B) / (2 * mean_G + mean_R + mean_B) if (2 * mean_G + mean_R + mean_B) else 0
 
@@ -78,23 +75,9 @@ def extract_features_opencv(image_path):
         'R': mean_R, 'G': mean_G, 'B': mean_B,
         'nr': nr, 'ng': ng, 'nb': nb,
         'gmr': gmr, 'gmb': gmb,
-        'L': L, 'a': a, 'b': b,
+        'L': L, 'a': a, 'b': b_val,
         'gdr': gdr, 'H_mean': H_mean, 'Y_mean': Y_mean, 'S': S, 'VI': VI
     }])
-
-def extract_features_fastapi(image: Image.Image):
-    image.save("temp.png")
-    df = extract_features_opencv("temp.png")
-    if df is not None:
-        return df.values
-    return None
-
-# -------------------------
-# Health check
-# -------------------------
-@app.get("/health")
-async def health():
-    return {"status": "healthy", "model_loaded": MODEL_LOADED}
 
 # -------------------------
 # Prediction endpoint
@@ -105,25 +88,30 @@ async def predict(file: UploadFile = File(...)):
         return {"success": False, "detail": "Model not loaded"}
 
     try:
+        # Read uploaded image
         contents = await file.read()
-        image = Image.open(io.BytesIO(contents)).convert("RGB")
-        features = extract_features_fastapi(image)
+        # Remove background
+        img_no_bg_bytes = remove(contents)
+        image = Image.open(io.BytesIO(img_no_bg_bytes)).convert("RGB")
 
-        if features is None:
+        # Extract features
+        features_df = extract_features_opencv(image)
+        if features_df is None:
             return {"success": False, "detail": "Failed to extract features"}
 
-        prediction = model.predict(features)[0]
+        # Predict
+        prediction = model.predict(features_df)[0]
 
-        # Decide nitrogen status & suggestion
-        if prediction < 30:
-            status = "Deficient"
-            suggestion = "Apply nitrogen-rich fertilizer immediately."
-        elif prediction < 50:
+        # Decide status & suggestion
+        if prediction < 20:
+            status = "Low"
+            suggestion = "Consider increasing nitrogen application."
+        elif prediction < 40:
             status = "Moderate"
             suggestion = "Consider moderate nitrogen application."
         else:
-            status = "Sufficient"
-            suggestion = "Nitrogen level is sufficient. Maintain current management."
+            status = "High"
+            suggestion = "Nitrogen level is sufficient."
 
         return {
             "success": True,
@@ -136,8 +124,8 @@ async def predict(file: UploadFile = File(...)):
         return {"success": False, "detail": f"Prediction failed: {str(e)}"}
 
 # -------------------------
-# Run locally
+# Run the app (local)
 # -------------------------
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+
