@@ -1,11 +1,10 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-import uvicorn
 import numpy as np
 import joblib
 from PIL import Image
 import io
+import os
 
 # -------------------------
 # Initialize FastAPI app
@@ -15,7 +14,7 @@ app = FastAPI(title="Rice Nitrogen Predictor")
 # Allow CORS for your Flutter app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or put your frontend URL here
+    allow_origins=["*"],  # Or use your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -24,13 +23,19 @@ app.add_middleware(
 # -------------------------
 # Load the model
 # -------------------------
-try:
-    model = joblib.load("model.pkl")
-    MODEL_LOADED = True
-except Exception as e:
-    print(f"Failed to load model: {e}")
+MODEL_LOADED = False
+model_path = "model.pkl"
+
+if os.path.exists(model_path):
+    try:
+        model = joblib.load(model_path)
+        MODEL_LOADED = True
+    except Exception as e:
+        print(f"Failed to load model: {e}")
+        model = None
+else:
+    print(f"Model file {model_path} not found")
     model = None
-    MODEL_LOADED = False
 
 # -------------------------
 # Health check endpoint
@@ -48,19 +53,19 @@ async def predict(file: UploadFile = File(...)):
         return {"success": False, "detail": "Model not loaded"}
 
     try:
-        # Read the uploaded image
+        # Read uploaded image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-        # Resize or preprocess if needed
-        # Example: flatten RGB values for RandomForest
+        # Resize or preprocess to match model input
+        # Flatten RGB values for RandomForest
         img_array = np.array(image)
         img_flat = img_array.flatten().reshape(1, -1)  # Ensure 2D input
 
-        # Predict using RandomForestRegressor
+        # Predict
         prediction = model.predict(img_flat)[0]
 
-        # Decide status & suggestion
+        # Determine status & suggestion
         if prediction < 20:
             status = "Low"
             suggestion = "Consider increasing nitrogen application."
@@ -82,7 +87,9 @@ async def predict(file: UploadFile = File(...)):
         return {"success": False, "detail": f"Prediction failed: {str(e)}"}
 
 # -------------------------
-# Run the app (local)
+# Run locally
 # -------------------------
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
+    import uvicorn
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port, reload=True)
