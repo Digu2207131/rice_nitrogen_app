@@ -1,24 +1,20 @@
 from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import uvicorn
 import numpy as np
 import joblib
 from PIL import Image
 import io
-from rembg import remove
-import cv2
-import pandas as pd
 
 # -------------------------
 # Initialize FastAPI app
 # -------------------------
 app = FastAPI(title="Rice Nitrogen Predictor")
 
-# Allow CORS for your Flutter app
+# Allow CORS for Flutter app
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or put your frontend URL here
+    allow_origins=["*"],  # Or your frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -45,39 +41,27 @@ async def health():
 # -------------------------
 # Feature extraction function
 # -------------------------
-def extract_features_opencv(image: Image.Image):
-    img_array = np.array(image)
-    if img_array.ndim != 3 or img_array.shape[2] != 3:
-        return None
-
-    mean_R = np.mean(img_array[:, :, 0])
-    mean_G = np.mean(img_array[:, :, 1])
-    mean_B = np.mean(img_array[:, :, 2])
-    sum_rgb = mean_R + mean_G + mean_B
-
-    nr = mean_R / sum_rgb if sum_rgb else 0
-    ng = mean_G / sum_rgb if sum_rgb else 0
-    nb = mean_B / sum_rgb if sum_rgb else 0
-
-    gmr = mean_G / mean_R if mean_R else 0
-    gmb = mean_G / mean_B if mean_B else 0
-
-    lab = cv2.cvtColor(img_array, cv2.COLOR_RGB2LAB)
-    hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
-    ycbcr = cv2.cvtColor(img_array, cv2.COLOR_RGB2YCrCb)
-
-    L, a, b_val = np.mean(lab[:, :, 0]), np.mean(lab[:, :, 1]), np.mean(lab[:, :, 2])
-    H_mean, S, Y_mean = np.mean(hsv[:, :, 0]), np.mean(hsv[:, :, 1]), np.mean(ycbcr[:, :, 0])
-    gdr = (mean_G - mean_R) / (mean_G + mean_R) if (mean_G + mean_R) else 0
-    VI = (2 * mean_G - mean_R - mean_B) / (2 * mean_G + mean_R + mean_B) if (2 * mean_G + mean_R + mean_B) else 0
-
-    return pd.DataFrame([{
-        'R': mean_R, 'G': mean_G, 'B': mean_B,
-        'nr': nr, 'ng': ng, 'nb': nb,
-        'gmr': gmr, 'gmb': gmb,
-        'L': L, 'a': a, 'b': b_val,
-        'gdr': gdr, 'H_mean': H_mean, 'Y_mean': Y_mean, 'S': S, 'VI': VI
-    }])
+def extract_features(image: Image.Image):
+    """
+    Extract 16 features from the image to match your model training.
+    Replace the placeholders with actual calculations.
+    """
+    image = image.convert("RGB").resize((100, 100))  # Resize to training size
+    arr = np.array(image)
+    
+    features = np.zeros(16)
+    
+    # Example placeholders (replace with your actual features)
+    features[0] = arr[:, :, 0].mean()   # mean R
+    features[1] = arr[:, :, 1].mean()   # mean G
+    features[2] = arr[:, :, 2].mean()   # mean B
+    features[3] = arr[:, :, 0].std()    # std R
+    features[4] = arr[:, :, 1].std()    # std G
+    features[5] = arr[:, :, 2].std()    # std B
+    # Fill in features[6] to features[15] with your actual 16 features
+    # For example: texture metrics, color indices, etc.
+    
+    return features.reshape(1, -1)  # Ensure 2D input for RandomForest
 
 # -------------------------
 # Prediction endpoint
@@ -90,17 +74,13 @@ async def predict(file: UploadFile = File(...)):
     try:
         # Read uploaded image
         contents = await file.read()
-        # Remove background
-        img_no_bg_bytes = remove(contents)
-        image = Image.open(io.BytesIO(img_no_bg_bytes)).convert("RGB")
+        image = Image.open(io.BytesIO(contents)).convert("RGB")
 
         # Extract features
-        features_df = extract_features_opencv(image)
-        if features_df is None:
-            return {"success": False, "detail": "Failed to extract features"}
+        X = extract_features(image)
 
-        # Predict
-        prediction = model.predict(features_df)[0]
+        # Predict using RandomForestRegressor
+        prediction = model.predict(X)[0]
 
         # Decide status & suggestion
         if prediction < 20:
@@ -124,8 +104,7 @@ async def predict(file: UploadFile = File(...)):
         return {"success": False, "detail": f"Prediction failed: {str(e)}"}
 
 # -------------------------
-# Run the app (local)
+# Run app locally
 # -------------------------
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
-
