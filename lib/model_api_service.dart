@@ -5,9 +5,8 @@ import 'package:http_parser/http_parser.dart';
 import 'package:mime/mime.dart';
 
 class ModelApiService {
-  // Update the IP if you want to connect from your phone on the same network
-  // If testing on PC, you can use 127.0.0.1
-  static const String apiUrl = "http://127.0.0.1:8001/predict"; 
+  // Use your deployed Render server URL
+  static const String apiUrl = "https://rice-nitrogen-app222222.onrender.com/predict"; 
   static const int timeoutSeconds = 60;
 
   /// Send image to Python backend and get SPAD prediction
