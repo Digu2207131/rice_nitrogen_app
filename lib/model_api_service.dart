@@ -5,11 +5,9 @@ import 'package:http_parser/http_parser.dart';
 import 'package:mime/mime.dart';
 
 class ModelApiService {
-  /// Base URL of your backend
-  /// For local testing: "http://127.0.0.1:8000"
-  /// For deployed server: "https://rice-nitrogen-app222222.onrender.com"
-  static const String baseUrl = "https://rice-nitrogen-app222222.onrender.com";
-
+  // Update the IP if you want to connect from your phone on the same network
+  // If testing on PC, you can use 127.0.0.1
+  static const String apiUrl = "http://127.0.0.1:8001/predict"; 
   static const int timeoutSeconds = 60;
 
   /// Send image to Python backend and get SPAD prediction
@@ -17,7 +15,7 @@ class ModelApiService {
     try {
       var request = http.MultipartRequest(
         'POST',
-        Uri.parse('$baseUrl/predict'),
+        Uri.parse(apiUrl),
       );
 
       // Detect MIME type automatically
@@ -30,7 +28,7 @@ class ModelApiService {
         contentType: MediaType(mimeSplit[0], mimeSplit[1]),
       ));
 
-      print('Sending request to: $baseUrl/predict');
+      print('Sending request to: $apiUrl');
       print('With file: ${imageFile.path} (MIME: $mimeType)');
 
       var response =
