@@ -175,8 +175,3 @@ async def debug_features():
     else:
         return {"error": "No features extracted - upload an image first"}
 
-# -------------------- Run App --------------------
-if __name__ == "__main__":
-    import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
