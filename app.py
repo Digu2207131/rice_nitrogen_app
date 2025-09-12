@@ -8,11 +8,13 @@ from rembg import remove
 import joblib
 import os
 import logging
+import uuid
 
-# Set up logging
+# -------------------- Logging Setup --------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# -------------------- FastAPI App --------------------
 app = FastAPI()
 
 # Allow all origins for mobile app
@@ -23,7 +25,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load trained model with better error handling
+# -------------------- Load Model --------------------
 try:
     model = joblib.load("model.pkl")
     logger.info("Model loaded successfully")
@@ -31,19 +33,19 @@ except FileNotFoundError:
     logger.warning("model.pkl not found. Creating dummy model for testing.")
     from sklearn.ensemble import RandomForestRegressor
     model = RandomForestRegressor(n_estimators=10)
-    # Train with dummy data
     X_dummy = np.random.rand(10, 16)
     y_dummy = np.random.rand(10) * 100
     model.fit(X_dummy, y_dummy)
     logger.info("Dummy model created for testing")
 
-# Feature extraction function - EXACTLY 16 FEATURES
+# -------------------- Feature Extraction --------------------
 def extract_features_opencv(image_path):
     try:
         img_bgr_alpha = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
         if img_bgr_alpha is None or img_bgr_alpha.shape[2] < 3:
             return None
 
+        # Separate BGR and alpha
         if img_bgr_alpha.shape[2] == 4:
             bgr = img_bgr_alpha[:, :, :3]
             alpha = img_bgr_alpha[:, :, 3]
@@ -92,36 +94,26 @@ def extract_features_opencv(image_path):
         logger.error(f"Error in feature extraction: {e}")
         return None
 
+# -------------------- Prediction Endpoint --------------------
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
+    temp_filename = f"temp_{uuid.uuid4().hex}.png"  # unique temp file
     try:
-        logger.info(f"Received prediction request for file: {file.filename}")
-
-        # Read uploaded file
+        logger.info(f"Received file: {file.filename}")
         image_data = await file.read()
-        logger.info(f"File read successfully, size: {len(image_data)} bytes")
 
         # Remove background
         output_bytes = remove(image_data)
         img_no_bg = Image.open(BytesIO(output_bytes))
-        logger.info("Background removed successfully")
-
-        # Save temporary image
-        temp_path = "temp_upload.png"
-        img_no_bg.save(temp_path)
-        logger.info(f"Temporary image saved: {temp_path}")
+        img_no_bg.save(temp_filename)
+        logger.info(f"Temporary file saved: {temp_filename}")
 
         # Extract features
-        features = extract_features_opencv(temp_path)
-        if features is None:
-            logger.error("Feature extraction failed")
-            return {"error": "Could not process image - feature extraction failed"}
+        features = extract_features_opencv(temp_filename)
+        if not features:
+            return {"error": "Feature extraction failed", "success": False}
 
-        logger.info("Features extracted successfully")
-        logger.info(f"Number of features extracted: {len(features)}")
-        logger.info(f"Feature names: {list(features.keys())}")
-
-        # Prepare features for prediction - EXACTLY 16 FEATURES
+        # Prepare feature vector
         feature_list = [
             features['R'], features['G'], features['B'],
             features['nr'], features['ng'], features['nb'],
@@ -131,13 +123,10 @@ async def predict(file: UploadFile = File(...)):
             features['S'], features['VI']
         ]
 
-        logger.info(f"Number of features in prediction list: {len(feature_list)}")
-
-        # Make prediction
+        # Prediction
         prediction = model.predict([feature_list])[0]
-        logger.info(f"Prediction made: {prediction}")
 
-        # Determine nitrogen status
+        # Nitrogen status
         if prediction < 30:
             status = "Deficient"
             suggestion = "Apply nitrogen-rich fertilizer immediately."
@@ -147,11 +136,6 @@ async def predict(file: UploadFile = File(...)):
         else:
             status = "Sufficient"
             suggestion = "Nitrogen level is sufficient. Maintain current management."
-
-        # Clean up
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-            logger.info("Temporary file cleaned up")
 
         return {
             "prediction": float(prediction),
@@ -163,7 +147,12 @@ async def predict(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}")
         return {"error": str(e), "success": False}
+    finally:
+        if os.path.exists(temp_filename):
+            os.remove(temp_filename)
+            logger.info(f"Temporary file deleted: {temp_filename}")
 
+# -------------------- Health & Root --------------------
 @app.get("/")
 async def root():
     return {"message": "Nitrogen Prediction API is running!"}
@@ -176,19 +165,18 @@ async def health_check():
         "model_loaded": hasattr(model, 'predict')
     }
 
+# -------------------- Debug Features --------------------
 @app.get("/debug-features")
 async def debug_features():
-    features = extract_features_opencv("temp_upload.png")
+    temp_file = "temp_upload.png"
+    features = extract_features_opencv(temp_file)
     if features:
-        return {
-            "number_of_features": len(features),
-            "feature_names": list(features.keys()),
-            "features": features
-        }
+        return {"number_of_features": len(features), "feature_names": list(features.keys()), "features": features}
     else:
         return {"error": "No features extracted - upload an image first"}
 
+# -------------------- Run App --------------------
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))  # ✅ Use Render's $PORT
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
