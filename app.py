@@ -4,7 +4,6 @@ from io import BytesIO
 from PIL import Image
 import numpy as np
 import cv2
-from rembg import remove
 import joblib
 import os
 import logging
@@ -15,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # FastAPI app
-app = FastAPI()
+app = FastAPI(title="Nitrogen Prediction API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -23,17 +22,32 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load model
-try:
-    model = joblib.load("model.pkl")
-    logger.info("Model loaded successfully")
-except FileNotFoundError:
-    logger.warning("model.pkl not found. Using dummy model.")
-    from sklearn.ensemble import RandomForestRegressor
-    model = RandomForestRegressor(n_estimators=10)
-    X_dummy = np.random.rand(10, 16)
-    y_dummy = np.random.rand(10) * 100
-    model.fit(X_dummy, y_dummy)
+# Lazy load ML model
+model = None
+def get_model():
+    global model
+    if model is None:
+        try:
+            model_file = "model.pkl"
+            model = joblib.load(model_file)
+            logger.info("ML model loaded successfully")
+        except FileNotFoundError:
+            logger.warning("model.pkl not found. Using dummy model.")
+            from sklearn.ensemble import RandomForestRegressor
+            model = RandomForestRegressor(n_estimators=10)
+            X_dummy = np.random.rand(10, 16)
+            y_dummy = np.random.rand(10) * 100
+            model.fit(X_dummy, y_dummy)
+    return model
+
+# Lazy load rembg
+rembg_model = None
+def get_rembg():
+    global rembg_model
+    if rembg_model is None:
+        from rembg import remove
+        rembg_model = remove
+    return rembg_model
 
 # Feature extraction
 def extract_features_opencv(image_path):
@@ -42,7 +56,7 @@ def extract_features_opencv(image_path):
         if img_bgr_alpha is None or img_bgr_alpha.shape[2] < 3:
             return None
 
-        bgr = img_bgr_alpha[:, :, :3] if img_bgr_alpha.shape[2] >= 3 else img_bgr_alpha
+        bgr = img_bgr_alpha[:, :, :3]
         alpha = img_bgr_alpha[:, :, 3] if img_bgr_alpha.shape[2] == 4 else np.ones(bgr.shape[:2], dtype=np.uint8)*255
         mask = alpha > 0
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)[mask]
@@ -83,11 +97,17 @@ def extract_features_opencv(image_path):
 async def predict(file: UploadFile = File(...)):
     temp_filename = f"temp_{uuid.uuid4().hex}.png"
     try:
+        # Read image bytes
         image_data = await file.read()
-        output_bytes = remove(image_data)
+        remove_bg = get_rembg()
+        output_bytes = remove_bg(image_data)  # Lazy loaded rembg
         img_no_bg = Image.open(BytesIO(output_bytes))
+
+        # Resize to reduce memory usage
+        img_no_bg.thumbnail((224, 224))
         img_no_bg.save(temp_filename)
 
+        # Extract features
         features = extract_features_opencv(temp_filename)
         if not features:
             return {"error": "Feature extraction failed", "success": False}
@@ -100,8 +120,12 @@ async def predict(file: UploadFile = File(...)):
             features['gdr'], features['H_mean'], features['Y_mean'],
             features['S'], features['VI']
         ]
+
+        # Predict
+        model = get_model()
         prediction = model.predict([feature_list])[0]
 
+        # Nitrogen status
         if prediction < 30:
             status, suggestion = "Deficient", "Apply nitrogen-rich fertilizer immediately."
         elif prediction < 50:
@@ -118,18 +142,18 @@ async def predict(file: UploadFile = File(...)):
         if os.path.exists(temp_filename):
             os.remove(temp_filename)
 
-# Health & root
+# Health check
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "model_loaded": model is not None}
+
+# Root
 @app.get("/")
 async def root():
     return {"message": "Nitrogen Prediction API is running!"}
 
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy", "service": "nitrogen-prediction-api", "model_loaded": hasattr(model, 'predict')}
-
-# Run app
+# Run app (local testing)
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run("app:app", host="0.0.0.0", port=port)
-
