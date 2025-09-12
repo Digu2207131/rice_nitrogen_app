@@ -23,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load trained model
+# Load trained model with better error handling
 try:
     model = joblib.load("model.pkl")
     logger.info("Model loaded successfully")
@@ -31,12 +31,13 @@ except FileNotFoundError:
     logger.warning("model.pkl not found. Creating dummy model for testing.")
     from sklearn.ensemble import RandomForestRegressor
     model = RandomForestRegressor(n_estimators=10)
+    # Train with dummy data
     X_dummy = np.random.rand(10, 16)
     y_dummy = np.random.rand(10) * 100
     model.fit(X_dummy, y_dummy)
     logger.info("Dummy model created for testing")
 
-# Feature extraction function - exactly 16 features
+# Feature extraction function - EXACTLY 16 FEATURES
 def extract_features_opencv(image_path):
     try:
         img_bgr_alpha = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
@@ -96,16 +97,31 @@ async def predict(file: UploadFile = File(...)):
     try:
         logger.info(f"Received prediction request for file: {file.filename}")
 
+        # Read uploaded file
         image_data = await file.read()
+        logger.info(f"File read successfully, size: {len(image_data)} bytes")
+
+        # Remove background
         output_bytes = remove(image_data)
         img_no_bg = Image.open(BytesIO(output_bytes))
+        logger.info("Background removed successfully")
+
+        # Save temporary image
         temp_path = "temp_upload.png"
         img_no_bg.save(temp_path)
+        logger.info(f"Temporary image saved: {temp_path}")
 
+        # Extract features
         features = extract_features_opencv(temp_path)
         if features is None:
+            logger.error("Feature extraction failed")
             return {"error": "Could not process image - feature extraction failed"}
 
+        logger.info("Features extracted successfully")
+        logger.info(f"Number of features extracted: {len(features)}")
+        logger.info(f"Feature names: {list(features.keys())}")
+
+        # Prepare features for prediction - EXACTLY 16 FEATURES
         feature_list = [
             features['R'], features['G'], features['B'],
             features['nr'], features['ng'], features['nb'],
@@ -115,8 +131,13 @@ async def predict(file: UploadFile = File(...)):
             features['S'], features['VI']
         ]
 
-        prediction = float(model.predict([feature_list])[0])
+        logger.info(f"Number of features in prediction list: {len(feature_list)}")
 
+        # Make prediction
+        prediction = model.predict([feature_list])[0]
+        logger.info(f"Prediction made: {prediction}")
+
+        # Determine nitrogen status
         if prediction < 30:
             status = "Deficient"
             suggestion = "Apply nitrogen-rich fertilizer immediately."
@@ -127,11 +148,13 @@ async def predict(file: UploadFile = File(...)):
             status = "Sufficient"
             suggestion = "Nitrogen level is sufficient. Maintain current management."
 
+        # Clean up
         if os.path.exists(temp_path):
             os.remove(temp_path)
+            logger.info("Temporary file cleaned up")
 
         return {
-            "prediction": prediction,
+            "prediction": float(prediction),
             "status": status,
             "suggestion": suggestion,
             "success": True
@@ -145,7 +168,6 @@ async def predict(file: UploadFile = File(...)):
 async def root():
     return {"message": "Nitrogen Prediction API is running!"}
 
-# Health check endpoint
 @app.get("/health")
 async def health_check():
     return {
@@ -154,10 +176,19 @@ async def health_check():
         "model_loaded": hasattr(model, 'predict')
     }
 
-# Run app on Render
+@app.get("/debug-features")
+async def debug_features():
+    features = extract_features_opencv("temp_upload.png")
+    if features:
+        return {
+            "number_of_features": len(features),
+            "feature_names": list(features.keys()),
+            "features": features
+        }
+    else:
+        return {"error": "No features extracted - upload an image first"}
+
 if __name__ == "__main__":
     import uvicorn
-    import os
-
-    port = int(os.environ.get("PORT", 8000))  # Use Render's PORT env variable
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8000))  # ✅ Use Render's $PORT
+    uvicorn.run("app:app", host="0.0.0.0", port=port, reload=False)
