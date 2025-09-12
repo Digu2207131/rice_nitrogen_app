@@ -1,59 +1,88 @@
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, File, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 import uvicorn
+import numpy as np
 import joblib
 from PIL import Image
 import io
-import numpy as np
 
-app = FastAPI(title="Rice Nitrogen Prediction API")
+# -------------------------
+# Initialize FastAPI app
+# -------------------------
+app = FastAPI(title="Rice Nitrogen Predictor")
 
-# Global variable to store the model
-model = None
+# Allow CORS for your Flutter app
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or put your frontend URL here
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-# Load model on startup
-@app.on_event("startup")
-async def load_model():
-    global model
-    try:
-        model = joblib.load("model.pkl")  # Ensure model.pkl is in the same folder
-        print("Model loaded successfully")
-    except Exception as e:
-        print(f"Failed to load model: {e}")
-        model = None
+# -------------------------
+# Load the model
+# -------------------------
+try:
+    model = joblib.load("model.pkl")
+    MODEL_LOADED = True
+except Exception as e:
+    print(f"Failed to load model: {e}")
+    model = None
+    MODEL_LOADED = False
 
-# Health endpoint
+# -------------------------
+# Health check endpoint
+# -------------------------
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "model_loaded": model is not None}
+    return {"status": "healthy", "model_loaded": MODEL_LOADED}
 
-# Predict endpoint
+# -------------------------
+# Prediction endpoint
+# -------------------------
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    global model
-    if model is None:
-        raise HTTPException(status_code=503, detail="Model not loaded yet")
+    if not MODEL_LOADED:
+        return {"success": False, "detail": "Model not loaded"}
 
     try:
-        # Read image
+        # Read the uploaded image
         contents = await file.read()
         image = Image.open(io.BytesIO(contents)).convert("RGB")
-        # Resize or preprocess as per your model
-        image = image.resize((128, 128))  # Example size
-        image_array = np.array(image) / 255.0
-        image_array = image_array.reshape(1, 128, 128, 3)  # Example for CNN
 
-        # Make prediction
-        prediction = model.predict(image_array)
-        predicted_value = float(prediction[0])
+        # Resize or preprocess if needed
+        # Example: flatten RGB values for RandomForest
+        img_array = np.array(image)
+        img_flat = img_array.flatten().reshape(1, -1)  # Ensure 2D input
 
-        return JSONResponse(content={"prediction": predicted_value})
+        # Predict using RandomForestRegressor
+        prediction = model.predict(img_flat)[0]
+
+        # Decide status & suggestion
+        if prediction < 20:
+            status = "Low"
+            suggestion = "Consider increasing nitrogen application."
+        elif prediction < 40:
+            status = "Moderate"
+            suggestion = "Consider moderate nitrogen application."
+        else:
+            status = "High"
+            suggestion = "Nitrogen level is sufficient."
+
+        return {
+            "success": True,
+            "prediction": float(prediction),
+            "status": status,
+            "suggestion": suggestion
+        }
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Prediction failed: {e}")
+        return {"success": False, "detail": f"Prediction failed: {str(e)}"}
 
-
-# For local testing
+# -------------------------
+# Run the app (local)
+# -------------------------
 if __name__ == "__main__":
-    uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)
-
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
