@@ -5,7 +5,11 @@ import 'package:http_parser/http_parser.dart';
 import 'package:mime/mime.dart';
 
 class ModelApiService {
-  static const String baseUrl = 'http://192.168.0.106:8000'; // PC LAN IP
+  /// Base URL of your backend
+  /// For local testing: "http://127.0.0.1:8000"
+  /// For deployed server: "https://rice-nitrogen-app222222.onrender.com"
+  static const String baseUrl = "https://rice-nitrogen-app222222.onrender.com";
+
   static const int timeoutSeconds = 60;
 
   /// Send image to Python backend and get SPAD prediction
