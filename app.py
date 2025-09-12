@@ -97,7 +97,7 @@ def extract_features_opencv(image_path):
 # -------------------- Prediction Endpoint --------------------
 @app.post("/predict")
 async def predict(file: UploadFile = File(...)):
-    temp_filename = f"temp_{uuid.uuid4().hex}.png"  # unique temp file
+    temp_filename = f"temp_{uuid.uuid4().hex}.png"
     try:
         logger.info(f"Received file: {file.filename}")
         image_data = await file.read()
@@ -113,7 +113,6 @@ async def predict(file: UploadFile = File(...)):
         if not features:
             return {"error": "Feature extraction failed", "success": False}
 
-        # Prepare feature vector
         feature_list = [
             features['R'], features['G'], features['B'],
             features['nr'], features['ng'], features['nb'],
@@ -123,7 +122,6 @@ async def predict(file: UploadFile = File(...)):
             features['S'], features['VI']
         ]
 
-        # Prediction
         prediction = model.predict([feature_list])[0]
 
         # Nitrogen status
@@ -137,12 +135,7 @@ async def predict(file: UploadFile = File(...)):
             status = "Sufficient"
             suggestion = "Nitrogen level is sufficient. Maintain current management."
 
-        return {
-            "prediction": float(prediction),
-            "status": status,
-            "suggestion": suggestion,
-            "success": True
-        }
+        return {"prediction": float(prediction), "status": status, "suggestion": suggestion, "success": True}
 
     except Exception as e:
         logger.error(f"Prediction error: {str(e)}")
@@ -159,11 +152,7 @@ async def root():
 
 @app.get("/health")
 async def health_check():
-    return {
-        "status": "healthy",
-        "service": "nitrogen-prediction-api",
-        "model_loaded": hasattr(model, 'predict')
-    }
+    return {"status": "healthy", "service": "nitrogen-prediction-api", "model_loaded": hasattr(model, 'predict')}
 
 # -------------------- Debug Features --------------------
 @app.get("/debug-features")
@@ -174,4 +163,3 @@ async def debug_features():
         return {"number_of_features": len(features), "feature_names": list(features.keys()), "features": features}
     else:
         return {"error": "No features extracted - upload an image first"}
-
