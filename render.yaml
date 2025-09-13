@@ -3,8 +3,8 @@ services:
     name: nitrogen-prediction-api
     env: python
     plan: free
-    buildCommand: py -3.11 -m pip install --upgrade pip setuptools wheel && py -3.11 -m pip install -r requirements.txt
-    startCommand: python app.py
+    buildCommand: pip install --upgrade pip setuptools wheel && pip install -r requirements.txt
+    startCommand: python -m uvicorn app:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.0
